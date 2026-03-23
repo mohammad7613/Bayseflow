@@ -1,0 +1,48 @@
+def ddm_DC_alphaToCpp( theta, b0, k, mu_ndt, sigma_ndt,mu_alpah, sigma_alpha,sigma_cpp,number_of_trials=2, tta_conditions=[2.5, 3.0, 3.5, 4.0],dt=0.005):
+    for_all_tta = {}
+    y = []
+    
+    for tta in tta_conditions:
+        x_all = []
+        x = []
+        tta_s = f"tta_condition={tta}"
+        for _ in range(number_of_trials):
+            jitter = np.random.uniform(0.0,0.1)
+            tta0 = tta + jitter
+            n_steps = 0.0
+            evidence = 0.0
+            t = 0.0
+            alpha_trial = mu_alpah + sigma_alpha * np.random.normal()
+            while evidence < b0 * (1 / (1 + np.exp(-k * (tta0 - t - 0.5 * b0)))) and t < tta0:
+                evidence += alpha_trial * (tta0 - t - theta)* dt + np.sqrt(dt) * np.random.normal()
+                n_steps += 1.0
+                t += dt
+
+            nt =np.random.normal(mu_ndt,sigma_ndt)
+            while nt < 0:
+                nt =np.random.normal(mu,sigma)
+            t += nt
+
+            if t >= tta0:
+                choicert = -1
+            else:
+                choicert =  t
+    
+            cpp = np.random.normal(alpha_trial,sigma_cpp)
+            x = [choicert,cpp]
+            x_all.append(x)
+            y = np.stack(x_all)
+
+        for_all_tta[tta_s] = y
+
+    return for_all_tta
+
+import numpy as np
+print(ddm_DC_alphaToCpp(1.25,1,2,0.3,0.01,2,0.5,0.1))
+
+result
+{'tta_condition=2.5': array([[0.52298981, 2.00466318],
+       [1.69819825, 1.36607668]]), 'tta_condition=3.0': array([[0.8513952 , 1.41225196],
+       [0.67629727, 2.15415222]]), 'tta_condition=3.5': array([[0.55255469, 2.22003037],
+       [0.41371664, 1.8921792 ]]), 'tta_condition=4.0': array([[0.75055062, 1.26865905],
+       [0.77406719, 1.08868468]])}

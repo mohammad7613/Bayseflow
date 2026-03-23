@@ -1,0 +1,53 @@
+# BayesFlow Conditional Inference - Requirements (PyTorch Backend)
+# Compatible with Python 3.8-3.12
+# Last updated: January 30, 2026
+# Uses PyTorch backend for Keras (NO TensorFlow required)
+
+# =============================================================================
+# INSTALLATION ORDER:
+# 1. First install PyTorch with CUDA (see below)
+# 2. Then: pip install -r requirements.txt
+# =============================================================================
+
+# STEP 1: Install PyTorch with appropriate CUDA version
+# Choose ONE of these commands BEFORE running pip install -r requirements.txt:
+#
+# For CUDA 12.1+:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+# For CUDA 11.8:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# For CPU only:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#
+# Then set Keras backend to PyTorch:
+#   export KERAS_BACKEND=torch  # Linux/Mac
+#   set KERAS_BACKEND=torch     # Windows
+
+# BayesFlow (main package)
+bayesflow>=1.0.0
+
+# Keras (will use PyTorch as backend - NO TensorFlow needed!)
+keras>=3.0.0
+
+# Scientific computing
+numpy>=1.23.0,<2.0.0  # CRITICAL: NumPy 2.0+ not fully compatible with BayesFlow
+scipy>=1.10.0
+pandas>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.13.0
+
+# Jupyter support (for notebooks)
+jupyter>=1.0.0
+notebook>=7.0.0
+ipykernel>=6.25.0
+ipywidgets>=8.0.0
+
+# Utilities
+tqdm>=4.65.0
+
+# Optional: faster numerical operations
+numba>=0.57.0

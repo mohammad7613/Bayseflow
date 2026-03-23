@@ -1,0 +1,14 @@
+# Python Environments & Cache
+bayesflow_env/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Generated Output & Data
+logs/
+results/
+trained_model*/
+real_data/
+
+# Specific Large Files
+*.pdf

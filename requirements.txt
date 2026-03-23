@@ -1,0 +1,41 @@
+# BayesFlow Conditional Inference - Requirements
+# Compatible with Python 3.8-3.12
+# Last updated: January 30, 2026
+
+# Core deep learning framework (BayesFlow backend)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# BayesFlow 2.0.8+ (automatically installs Keras 3 as dependency)
+# Note: BayesFlow 2.0.8+ requires NumPy >= 2.2.6 (different from older versions!)
+bayesflow>=2.0.0
+numpy>=2.2.6
+
+# Note: Keras and its backend are NOT needed as separate installs
+# BayesFlow 2.0+ bundles Keras 3 internally and will use PyTorch as backend
+
+# Scientific computing
+numpy>=1.23.0,<2.0.0  # BayesFlow may have issues with NumPy 2.0+
+scipy>=1.10.0
+pandas>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0  # Optional but useful for plots
+
+# Jupyter support (for notebooks)
+jupyter>=1.0.0
+notebook>=7.0.0
+ipykernel>=6.25.0
+ipywidgets>=8.0.0  # For interactive widgets
+
+# Progress bars and utilities
+tqdm>=4.65.0  # Progress bars for training
+
+# Optional: for faster numerical operations
+numba>=0.57.0  # JIT compilation for faster code
+
+# Development tools (optional)
+pytest>=7.4.0  # For testing
+black>=23.0.0  # Code formatting
+flake8>=6.0.0  # Linting
