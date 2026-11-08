@@ -1,19 +1,36 @@
+import os
+os.environ.setdefault("KERAS_BACKEND", "torch")
+
 import argparse
-import json
 from pathlib import Path
 import warnings
 warnings.filterwarnings("ignore", message="When using torch backend")
 
-import bayesflow
 from torch import device,cuda
-import yaml
 import copy
 from bayesflow_models.discovery import discover_model_specs
-from bayesflow_models.interfaces import WorkflowContext, WorkflowResult, ModelSpec
 import bayesflow_models.workflow as wf
-from bayesflow_models.discovery import discover_workflows
-import logging
 from typing import Union, Any
+
+from bayesflow_models.discovery import discover_plugins
+
+import yaml
+
+from collections.abc import Mapping
+
+from bayesflow_models.interfaces import (
+    ModelSpec,
+    Workflow,
+)
+
+
+from bayesflow_models.evaluation.interfaces import EvaluationSpec
+
+
+
+
+
+
 
 DEFAULT_CONFIG = {
     "device": device('cuda' if cuda.is_available() else 'cpu'),
@@ -43,6 +60,28 @@ def setup_directories(config: dict):
         Path(path).mkdir(parents=True, exist_ok=True)
     print("✓ Directories setup complete")
 
+
+def ensure_directories(config: dict, path_keys: tuple[str, ...],) -> None:
+    paths = config.get("paths")
+
+    if not isinstance(paths, dict):
+        raise ValueError(
+            "Runtime configuration must contain "
+            "a paths dictionary."
+        )
+
+    for key in path_keys:
+        if key not in paths:
+            raise ValueError(
+                f"Missing configured path: {key}"
+            )
+
+        Path(paths[key]).mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+
 def build_runtime_config(args):
     config = copy.deepcopy(DEFAULT_CONFIG)
 
@@ -70,6 +109,7 @@ def build_runtime_config(args):
     if args.command == "resume":
         config["training"]["resume_epochs"] = args.epochs
         config["training"]["batch_size"] = args.batch_size
+        config["training"]["n_sim"] = args.n_sim
 
     if args.command in {"recovery", "mixed-recovery"}:
         config["recovery"]["n_test_sims"] = args.n_test_sims
@@ -85,28 +125,6 @@ def build_runtime_config(args):
     
     return config
 
-def update_config(base: dict, updates: dict) -> dict:
-    for key, value in updates.items():
-        if isinstance(value,dict) and isinstance(base.get(key), dict):
-            update_config(base[key],value)
-        else:
-            base[key] = value
-    return base
-
-# There is no need for load config as all the details of the implmentation will be determined via terminal.
-def load_config(path):
-    if path is None:
-        raise ValueError("The path input to load config is None")
-    
-    path = Path(path)
-    with open(path, "r") as f:
-        if path.suffix in {".yml", ".yaml"}:
-            user_config = yaml.safe_load(f)
-        elif path.suffix == ".json":
-            user_config = json.load(f)
-        else:
-            raise ValueError("Unsupported config format: {path.suffix}")
-    return user_config
 
 
 ## Helper function for terminal-based of visualization of data stored in format of list of dictionary
@@ -153,7 +171,10 @@ def print_checkpoints_table(records: list[dict]) -> None:
 
 def print_models_table(specs: dict) -> None:
       if not specs:
-          print("No spec found.")
+          print(
+                "No model plugins found. "
+                "Mount plugins in the working directory or pass --plugin-path DIRECTORY."
+            )
           return
 
       headers = ["SPEC NAME","FAMILY","DESCRIPTION"]
@@ -170,36 +191,27 @@ def handle_checkpoints_list(config):
 def handle_models_list(specs):
     print_models_table(specs=specs)
 
-def handle_config(args) -> dict:
-    user_args_dict = None
-    if args.config:
-          if args.plugin_path == None or args.workflow == "builtin":
-             raise ValueError("In case of optional config you need to define workflow of your own")
-          user_args_dict = load_config(args)
-    if user_args_dict:
-            return user_args_dict
-    else:
-            return build_runtime_config(args)   
 
-
-def handle_train(args):
-    config = build_runtime_config(args)
-    specs = discover_model_specs(args.plugin_path)
-
-    for spec_name in args.models:
-        spec = specs[spec_name]
-        wf.train_from_spec(spec, config)
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="normalized flow")
+    parser = argparse.ArgumentParser(prog="bayesflow-cli")
 
     parser.add_argument("--device", "-d", default=device('cpu'), help="Select the device of the torch")
     parser.add_argument("--checkpoint-dir", default=None)
     parser.add_argument("--results-dir", default=None)
     parser.add_argument("--logs-dir", default=None)
-    parser.add_argument("--plugin-path",action="append",default=[],help="Extra directory containing external model spec modules.")
-    parser.add_argument("--config", type=str,help="You can input your config assuming that you import your workflow plugin")
+    parser.add_argument(
+    "--plugin-path",
+    action="append",
+    default=[],
+    metavar="DIRECTORY",
+    help=(
+        "Directory containing trusted ModelSpec or Workflow plugins. "
+        "May be passed multiple times. Defaults to the current directory."
+    ),)
+
+    # parser.add_argument("--config", type=str,help="You can input your config assuming that you import your workflow plugin")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -214,22 +226,42 @@ def build_parser():
 
     train_parser = subparsers.add_parser("train")
     train_parser.add_argument("--models", nargs="+", required=True)
-    train_parser.add_argument("--n-sim", type=int, default=100)
+    train_parser.add_argument("--batches-per-epoch","--n-sim", dest= "n_sim",type=int, default=100)
     train_parser.add_argument("--epochs", type=int, default=10)
     train_parser.add_argument("--batch-size", type=int, default=32)
 
     resume_parser = subparsers.add_parser("resume")
     resume_parser.add_argument("--artifacts", nargs="+", required=True)
-    resume_parser.add_argument("--n-sim", type=int, default=100)
+    resume_parser.add_argument("--batches-per-epoch","--n-sim", dest="n_sim", type=int, default=100)
     resume_parser.add_argument("--epochs", type=int, default=3)
     resume_parser.add_argument("--batch-size", type=int, default=32)
     resume_parser.add_argument("--mode",choices=["new","old"],default="old")
 
+
+    evaluations_parser = subparsers.add_parser(
+    "evaluations",
+    help="Inspect workspace evaluation scenarios.",)
+
+    evaluations_sub = evaluations_parser.add_subparsers(dest="evaluations_command",required=True,)
+    evaluations_sub.add_parser("list",help="List discovered model/scenario pairs.")
+
+    evaluate_parser = subparsers.add_parser("evaluate",help="Evaluate saved artifacts using a workspace scenario.",)
+    
+    evaluate_parser.add_argument("--artifacts",nargs="+",required=True,help="Checkpoint artifact IDs or aliases.",)
+    evaluate_parser.add_argument("--scenario",required=True,help="Name of a discovered EvaluationSpec.",)
+    evaluate_parser.add_argument("--options-file",type=Path,help="YAML mapping of scenario-specific options.",)
+    evaluate_parser.add_argument("--n-posterior-samples",type=int,default=1000,help="Posterior draws per evaluation dataset.",)
+    evaluate_parser.add_argument("--mode", choices=["save_only", "visualize"], default="save_only")
+    
+    
     recovery_parser = subparsers.add_parser("recovery")
     recovery_parser.add_argument("--artifacts", nargs="+", required=True)
     recovery_parser.add_argument("--n-test-sims", type=int, default=50)
     recovery_parser.add_argument("--n-posterior-samples", type=int, default=50)
     recovery_parser.add_argument("--mode", choices=["save_only", "visualize"], default="save_only")
+    
+
+
 
     mixed_recovery_parser = subparsers.add_parser(
         "mixed-recovery",
@@ -248,82 +280,200 @@ def build_parser():
 
 
 
+def require_model(
+    specs: Mapping[str, ModelSpec],
+    model_name: str,
+) -> ModelSpec:
+    try:
+        return specs[model_name]
+    except KeyError:
+        available = ", ".join(sorted(specs)) or "none"
+
+        raise ValueError(
+            f"Unknown model {model_name!r}. "
+            f"Available models: {available}. "
+            "Check the mounted workspace or --plugin-path."
+        ) from None
+
+
+def require_evaluation(
+    evaluations: Mapping[tuple[str, str], EvaluationSpec],
+    *,
+    model_name: str,
+    scenario_name: str,
+) -> EvaluationSpec:
+    """Select a scenario registered for this checkpoint's model."""
+    key = (model_name, scenario_name)
+
+    try:
+        return evaluations[key]
+    except KeyError:
+        available = ", ".join(
+            sorted(
+                scenario
+                for model, scenario in evaluations
+                if model == model_name
+            )
+        ) or "none"
+
+        raise ValueError(
+            f"Unknown evaluation {scenario_name!r} "
+            f"for model {model_name!r}. "
+            f"Available evaluations: {available}. "
+            "Check --plugin-path and the workspace registrations."
+        ) from None
+
+
+
+def load_evaluation_options(path: Path | None) -> dict[str, Any]:
+    """Read configuration as data; the scenario validates its own settings."""
+    if path is None:
+        return {}
+
+    with path.open("r", encoding="utf-8") as stream:
+        options = yaml.safe_load(stream)
+
+    if not isinstance(options, dict):
+        raise ValueError(
+            "The evaluation options file must contain a YAML mapping."
+        )
+
+    if not all(isinstance(key, str) for key in options):
+        raise ValueError("Evaluation option names must be strings.")
+
+    return options
+
+
+
+def require_workflow(
+      workflows: Mapping[str, Workflow],
+      workflow_name: str,
+      *,
+      model_name: str | None = None,
+  ) -> Workflow:
+      try:
+          return workflows[workflow_name]
+      except KeyError:
+          available = (
+              ", ".join(sorted(workflows))
+              or "none"
+          )
+
+          model_context = (
+              f" required by model {model_name!r}"
+              if model_name is not None
+              else ""
+          )
+
+          raise ValueError(
+              f"Unknown workflow {workflow_name!r}"
+              f"{model_context}. "
+              f"Available workflows: {available}."
+          ) from None
+
+
+
+
 def main():
-      parser = build_parser()
-      args = parser.parse_args()
-      # discoveries from plugin path and logs if there is no plugin paths or failed discoveries
-      # discover specs from plugin path 
-      specs = discover_model_specs(plugin_paths=args.plugin_path)
-      if args.command == "models" and args.models_command == "list":
-        handle_models_list(specs=specs)
+    parser = build_parser()
+    args = parser.parse_args()
+    ## New order 
+    if (args.command == "models" and args.models_command == "list"):
+        registry = discover_plugins( plugin_paths=args.plugin_path)
 
+        handle_models_list(specs=registry.models)
         return
-      # discover workflow
-      workflows = discover_workflows(plugin_paths=args.plugin_path)
 
-      # Find out optional config which matches the user WorkFlow Plugin
-      config = handle_config(args)
+    config = build_runtime_config(args)
 
-      # Set up directories
-      setup_directories(config)
+    if (args.command == "checkpoints" and args.checkpoints_command == "list"):
+        handle_checkpoints_list(config)
+        return
+
+    registry = discover_plugins(
+        plugin_paths=args.plugin_path
+    )
+
+    specs = registry.models
+    workflows = registry.workflows
+    evaluations = registry.evaluations
+
+    if args.command == "evaluations":
+        if not registry.evaluations:
+            print("No evaluation scenarios found. Check --plugin-path.")
+            return
+
+        for key, evaluation_spec in sorted(evaluations.items()):
+            model_name, scenario_name = key
+            print(
+                f"{model_name}\t{scenario_name}\t"
+                f"{evaluation_spec.description}"
+            )
+        return
+
+
 
 
 
       
-      if args.command == "checkpoints" and args.checkpoints_command == "list":
-        handle_checkpoints_list(config=config)
-        return
-      if args.command == "train":
+    ## Ensure directory should be checked if it is necessary for the command inside each brand. 
+    if args.command == "train":
+        ensure_directories(config, path_keys=("checkpoints", "results", "logs"))
         for spec_name in args.models:
-            if spec_name not in specs.keys():
-                raise ValueError(f"Model {spec_name} has not found in detected models")
-            spec = specs[spec_name]
-            if spec.workflow not in workflows.keys():
-                raise ValueError(f"workflow {spec.workflow} has not found in detected workflows")
-            workflow = workflows[spec.workflow]
-            workflow.train_fn(spec, config)
+
+            spec = require_model(specs, spec_name)
+            workflow = require_workflow(workflows, spec.workflow,model_name=spec.name)
+            workflow.train_fn(spec,config)
       
-      if args.command == "resume":
+    if args.command == "resume":
+        ensure_directories(config, path_keys=("checkpoints", "results", "logs"))
         for ref in args.artifacts:
             metadata = wf.resolve_artifact_ref(ref, config)
-            spec_name = metadata["spec_name"]
-            if spec_name not in specs.keys():
-                raise ValueError(f"Model {spec_name} has not found in detected models")
-            spec = specs[spec_name]
+            # spec_name = metadata["spec_name"]
+
+            spec = require_model(specs,metadata["spec_name"])
+            workflow = require_workflow(workflows,spec.workflow,model_name=spec.name)
             config_added_alia = copy.deepcopy(config)
             config_added_alia["metadata"] = metadata
             config_added_alia["mode"] = args.mode
-            if spec.workflow not in workflows.keys():
-                raise ValueError(f"workflow {spec.workflow} has not found in detected workflows")
             workflow = workflows[spec.workflow]
             workflow.resume_fn(spec, config_added_alia)  
 
 
-      if args.command == "recovery":
-        for ref in args.artifacts:
-            metadata = wf.resolve_artifact_ref(ref, config)
-            spec_name = metadata["spec_name"]
-            if spec_name not in specs.keys():
-                raise ValueError(f"Model {spec_name} has not found in detected models")
-            spec = specs[spec_name]
-            config_added_alia = copy.deepcopy(config)
-            config_added_alia["metadata"] = metadata
-            config_added_alia["mode"] = args.mode
-            if spec.workflow not in workflows.keys():
-                raise ValueError(f"workflow {spec.workflow} has not found in detected workflows")
-            workflow = workflows[spec.workflow]
-            workflow.recovery_fn(spec, config_added_alia)
-
-      if args.command == "mixed-recovery":
-        from bayesflow_models.mixed_tta_evaluation import evaluate_mixed_tta_artifact_with_bf_recovery
+    if args.command == "recovery":
+        ensure_directories(
+            config,
+            path_keys=("checkpoints", "results", "logs"),
+        )
 
         for ref in args.artifacts:
             metadata = wf.resolve_artifact_ref(ref, config)
-            spec_name = metadata["spec_name"]
-            if spec_name not in specs.keys():
-                raise ValueError(f"Model {spec_name} has not found in detected models")
 
-            spec = specs[spec_name]
+            spec = require_model(specs, metadata["spec_name"])
+            workflow = require_workflow(
+                workflows,
+                spec.workflow,
+                model_name=spec.name,
+            )
+
+            recovery_config = copy.deepcopy(config)
+            recovery_config["metadata"] = metadata
+            recovery_config["mode"] = args.mode
+
+            workflow.recovery_fn(spec, recovery_config)
+
+    if args.command == "mixed-recovery":
+        ensure_directories(
+            config,
+            path_keys=("checkpoints", "results", "logs"),
+        )
+        from examples.cognitive_developer_workspace.cognitive_models_codes.mixed_tta_evaluation import evaluate_mixed_tta_artifact_with_bf_recovery
+
+        for ref in args.artifacts:
+            metadata = wf.resolve_artifact_ref(ref, config)
+
+            spec = require_model(specs,metadata["spec_name"])
+
             config["mode"] = args.mode
             report = evaluate_mixed_tta_artifact_with_bf_recovery(
                 artifact_ref=ref,
@@ -337,7 +487,65 @@ def main():
             )
             print(f"Mixed-TTA recovery for {report['artifact_id']}")
 
+    if args.command == "evaluate":
+        # Validate the common execution option before loading a model.
+        if args.n_posterior_samples < 1:
+            parser.error("--n-posterior-samples must be at least 1.")
 
+        try:
+            options = load_evaluation_options(args.options_file)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            parser.error(str(exc))
+
+        # This common engine setting is controlled by the CLI flag.
+        # It overrides any identically named value in the YAML file.
+        options["n_posterior_samples"] = args.n_posterior_samples
+
+        # Resolve all selections before starting potentially expensive work.
+        selected = []
+        try:
+            for artifact_ref in args.artifacts:
+                metadata = wf.resolve_artifact_ref(artifact_ref, config)
+
+                model_spec = require_model(
+                    registry.models,
+                    metadata["spec_name"],
+                )
+                evaluation_spec = require_evaluation(
+                    registry.evaluations,
+                    model_name=model_spec.name,
+                    scenario_name=args.scenario,
+                )
+                selected.append(
+                    (artifact_ref, model_spec, evaluation_spec)
+                )
+        except (FileNotFoundError, ValueError) as exc:
+            parser.error(str(exc))
+
+        # Import when executing evaluation, rather than for command parsing.
+        from bayesflow_models.evaluation.fixed_engine import run_evaluation
+
+        for artifact_ref, model_spec, evaluation_spec in selected:
+            if args.mode == "visualize":
+               visualize = True
+            else:
+                visualize = False   
+            
+            report = run_evaluation(
+                artifact_ref=artifact_ref,
+                model_spec=model_spec,
+                evaluation_spec=evaluation_spec,
+                config=copy.deepcopy(config),
+                options=copy.deepcopy(options),
+                visualize=visualize
+                
+            )
+            print(
+                f"Evaluation {evaluation_spec.name!r} completed "
+                f"for {report['artifact_id']}."
+            )
+
+        return
            
 
    

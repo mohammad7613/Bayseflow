@@ -1,0 +1,1 @@
+DESCRIPTION = "Model loaded from an external test plugin"

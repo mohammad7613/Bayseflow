@@ -4,21 +4,18 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
-# Generated Output & Data
+# Generated artifacts (outputs — keep out of git)
+checkpoints/
 logs/
 results/
 trained_model*/
 real_data/
-
-# Specific Large Files
-*.pdf
-
-
-# ignore codex files
-.codex
-
 *.keras
 
-*.json
-
-*.txt
+# Misc
+*.pdf
+.codex
+.claude
+.vscode/
+*.egg-info
+copy_to_pc.sh

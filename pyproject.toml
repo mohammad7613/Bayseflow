@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "bayesflow-cli"
+version = "0.1.0"
+description = "Cognitive modeling with BayesFlow — trial-wise joint DDM / diffusion models"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" } # <-- set your real license
+authors = [{ name = "Your Name", email = "team.ai.eucalyptus@gmail.com" }]
+# Runtime dependencies — pinned, because this is a deployable application.
+dependencies = [
+"bayesflow==2.0.8",
+"keras==3.13.2",
+"torch==2.7.1",
+"torchvision==0.22.1",
+"numpy==2.4.1",
+"scipy==1.17.0",
+"pandas==3.0.0",
+"matplotlib==3.10.8",
+"PyYAML==6.0.3",
+"tqdm==4.67.1",
+]
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "jupyter", "nbconvert"]
+cpu = ["torch==2.7.1", "torchvision==0.22.1"]
+cu118 = ["torch==2.7.1", "torchvision==0.22.1"]
+cu128 = ["torch==2.7.1", "torchvision==0.22.1"]
+
+# Makes `bayesflow-models <command>` work anywhere after install,
+# instead of `python cli.py <command>`.
+[project.scripts]
+bayesflow-cli = "cli:main"
+# cli.py is a top-level module (not inside the package), so ship it explicitly...
+[tool.setuptools]
+py-modules = ["cli"]
+# ...and auto-discover the package itself.
+[tool.setuptools.packages.find]
+include = ["bayesflow_models*"]
+
+
+[tool.uv]
+# you can't be both at once — declaring the conflict makes uv enforce it
+conflicts = [[{ extra = "cpu" }, { extra = "cu118" }, {extra = "cu128"}]]
+[tool.uv.sources]
+torch = [
+{ index = "pytorch-cpu", extra = "cpu" },
+{ index = "pytorch-cu118", extra = "cu118" },
+{ index = "pytorch-cu128", extra = "cu128"},
+]
+
+
+torchvision = [
+{ index = "pytorch-cpu", extra = "cpu" },
+{ index = "pytorch-cu118", extra = "cu118" },
+{ index = "pytorch-cu128", extra = "cu128"},
+]
+
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true # used ONLY by packages that name it above (not a fallback)
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

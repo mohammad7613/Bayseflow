@@ -1,0 +1,8 @@
+# Only source, settings, scripts, and reference protocols belong in version control.
+__pycache__/
+*.pyc
+.cache/
+.pytest_cache/
+checkpoints/
+results/
+logs/

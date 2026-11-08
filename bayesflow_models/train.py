@@ -1,15 +1,13 @@
 import os
 import warnings
 warnings.filterwarnings("ignore", message="When using torch backend")
-
-import bayesflow
 os.environ.setdefault("KERAS_BACKEND", "torch")
+
+
 
 import keras
 import bayesflow as bf
 import torch
-import numpy as np
-import pandas as pd
 import numpy as np
 from scipy import stats
 from time import time
@@ -227,6 +225,8 @@ def train_amortizer_resume(
     initial_lr: float = 5e-4,
     checkpoint_dir: str = "trained_model/checkpoints",
     checkpoint_save: str = None,
+    *,
+    device: str | torch.device = "cpu",
 ):
     """
     1) Looks for `<checkpoint_dir>/<model_name>.keras`.  
@@ -243,74 +243,90 @@ def train_amortizer_resume(
     if checkpoint_save == None:
         checkpoint_save = checkpoint_load
 
-    # Step 2: Build a brand‐new BasicWorkflow, but inject our optimizer (loaded or freshly created)
-    summary_net   = bf.networks.SetTransformer(summary_dim=10)
-    inference_net = bf.networks.CouplingFlow()
+    training_device = torch.device(device)
 
-    # Step 1: Try to load existing amortizer (weights + optimizer state)
-    if os.path.exists(checkpoint_load):
-        print(f"▶️ Loading existing amortizer from:\n   {checkpoint_load}")
-        loaded_amortizer = keras.models.load_model(
-            checkpoint_load,
-            custom_objects={
-                # BayesFlow’s custom layers/networks:
-                "SetTransformer": bf.networks.SetTransformer,
-                "CouplingFlow": bf.networks.CouplingFlow,
-                # If you used any other custom Modules, list them here as well
-            }
+    if training_device.type not in {"cpu", "cuda"}:
+        raise ValueError("Supported training devices are cpu and cuda.")
+
+    if training_device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            f"Requested device {training_device}, but CUDA is unavailable."
         )
-        print("✅  Successfully loaded amortizer (weights + optimizer)")
+    for name, value in (
+        ("n_sim", n_sim),
+        ("epochs", epochs),
+        ("batch_size", batch_size),
+    ):
+        if type(value) is not int or value < 1:
+            raise ValueError(f"{name} must be a positive integer.")
+    with keras.device(str(training_device)):
+        # Step 2: Build a brand‐new BasicWorkflow, but inject our optimizer (loaded or freshly created)
+        summary_net   = bf.networks.SetTransformer(summary_dim=10)
+        inference_net = bf.networks.CouplingFlow()
 
-        # Extract the loaded optimizer instance from the loaded Keras Model:
-        loaded_optimizer = loaded_amortizer.optimizer
-        if loaded_optimizer is None:
-            raise RuntimeError(
-                "Loaded amortizer has no .optimizer attached. "
-                "That implies `save()` did not store optim state. "
-                "Double‐check that you originally called `amortizer.save(...)`."
+        # Step 1: Try to load existing amortizer (weights + optimizer state)
+        if os.path.exists(checkpoint_load):
+            print(f"▶️ Loading existing amortizer from:\n   {checkpoint_load}")
+            loaded_amortizer = keras.models.load_model(
+                checkpoint_load,
+                custom_objects={
+                    # BayesFlow’s custom layers/networks:
+                    "SetTransformer": bf.networks.SetTransformer,
+                    "CouplingFlow": bf.networks.CouplingFlow,
+                    # If you used any other custom Modules, list them here as well
+                }
             )
-        
-        workflow = bf.workflows.BasicWorkflow(
-        simulator=simulator,
-        adapter=adapter,
-        inference_network=inference_net,
-        summary_network=summary_net,
-        optimizer=loaded_optimizer,
-        initial_learning_rate=initial_lr,
-        checkpoint_filepath=None
-        )
-    else:
-        print(f"⚠️ No checkpoint found at '{checkpoint_load}'.  Starting from scratch.")
-        # Fall back to exactly the same steps as train_amortizer_from_scratch
-        loaded_amortizer = None
-        # loaded_optimizer = keras.optimizers.Adam(learning_rate=initial_lr)
-        workflow = bf.BasicWorkflow(
-            simulator=model[0],
-            adapter=model[1],
+            print("✅  Successfully loaded amortizer (weights + optimizer)")
+
+            # Extract the loaded optimizer instance from the loaded Keras Model:
+            loaded_optimizer = loaded_amortizer.optimizer
+            if loaded_optimizer is None:
+                raise RuntimeError(
+                    "Loaded amortizer has no .optimizer attached. "
+                    "That implies `save()` did not store optim state. "
+                    "Double‐check that you originally called `amortizer.save(...)`."
+                )
+            
+            workflow = bf.workflows.BasicWorkflow(
+            simulator=simulator,
+            adapter=adapter,
             inference_network=inference_net,
             summary_network=summary_net,
+            optimizer=loaded_optimizer,
+            initial_learning_rate=initial_lr,
+            checkpoint_filepath=None
+            )
+        else:
+            print(f"⚠️ No checkpoint found at '{checkpoint_load}'.  Starting from scratch.")
+            # Fall back to exactly the same steps as train_amortizer_from_scratch
+            loaded_amortizer = None
+            # loaded_optimizer = keras.optimizers.Adam(learning_rate=initial_lr)
+            workflow = bf.BasicWorkflow(
+                simulator=model[0],
+                adapter=model[1],
+                inference_network=inference_net,
+                summary_network=summary_net,
+            )
+        # Move the amortizer inside this new workflow:
+        if loaded_amortizer is not None:
+            workflow.approximator = loaded_amortizer
+            print("▶️  Plugged loaded amortizer into new BasicWorkflow")
+        
+        workflow.approximator.to(training_device)
+
+        # Step 3: Run further online training
+        print(f"▶️ Continuing training for {epochs} more epochs …")
+        history = workflow.fit_online(
+            epochs=epochs,
+            batch_size=batch_size,
+            num_batches_per_epoch=n_sim,
+            max_queue_size=100
         )
-    # Move the amortizer inside this new workflow:
-    if loaded_amortizer is not None:
-        workflow.approximator = loaded_amortizer
-        print("▶️  Plugged loaded amortizer into new BasicWorkflow")
-    # Move to GPU
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    workflow.approximator.to(device)
 
-    # Step 3: Run further online training
-    print(f"▶️ Continuing training for {epochs} more epochs …")
-    history = workflow.fit_online(
-        epochs=epochs,
-        batch_size=batch_size,
-        num_batches_per_epoch=n_sim,
-        max_queue_size=100
-    )
-
-    # Step 4: Re‐save the updated amortizer (now with new weights + updated optimizer state)
-    # os.makedirs(checkpoint_dir, exist_ok=True)
-    Path(checkpoint_save).parent.mkdir(parents=True, exist_ok=True)
-    workflow.approximator.save(filepath=checkpoint_save)
-    print(f"✅  Saved updated amortizer (weights + optimizer) at:\n   {checkpoint_save}")
+        # Step 4: Re‐save the updated amortizer (now with new weights + updated optimizer state)
+        # os.makedirs(checkpoint_dir, exist_ok=True)
+        Path(checkpoint_save).parent.mkdir(parents=True, exist_ok=True)
+        workflow.approximator.save(filepath=checkpoint_save)
+        print(f"✅  Saved updated amortizer (weights + optimizer) at:\n   {checkpoint_save}")
 
     return history

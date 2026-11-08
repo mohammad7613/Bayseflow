@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault("KERAS_BACKEND", "torch")
+
 from bayesflow_models.interfaces import ModelSpec
 from bayesflow_models.train import train_amortizer_resume
 import secrets
@@ -7,7 +10,7 @@ from pathlib import Path
 from bayesflow_models.interfaces import ModelSpec, WorkflowContext, WorkflowResult
 import json
 import keras
-import os
+
 from bayesflow.diagnostics.plots import recovery
 import matplotlib.pyplot as plt
 
@@ -191,12 +194,16 @@ def ensure_metadata_alias(metadata: dict, metadata_path: Path, config: dict) -> 
 def resolve_context_from_artifact_id(artifact_id: str, config: dict) -> WorkflowContext:
     metadata = load_metadata(artifact_id, config)
 
+    checkpoint_root = Path(config["paths"]["checkpoints"])
+    results_root = Path(config["paths"]["results"])
+    logs_root = Path(config["paths"]["logs"])
+
     return WorkflowContext(
-        artifact_id=metadata["artifact_id"],
-        checkpoint_path=Path(metadata["checkpoint_path"]),
-        metadata_path=Path(metadata["metadata_path"]),
-        results_dir=Path(metadata["results_dir"]),
-        logs_dir=Path(metadata["logs_dir"]),
+        artifact_id=artifact_id,
+        checkpoint_path=checkpoint_root / f"{artifact_id}.keras",
+        metadata_path=checkpoint_root / f"{artifact_id}.meta.json",
+        results_dir=results_root / artifact_id,
+        logs_dir=logs_root / artifact_id,
         device=config["device"],
     )
 
@@ -277,6 +284,7 @@ def train_from_spec(spec: ModelSpec, config: dict) -> WorkflowResult:
         batch_size=config["training"]["batch_size"],
         initial_lr=5e-4,
         checkpoint_dir=config["paths"]["checkpoints"],
+        device=ctx.device
     )
 
     result = WorkflowResult(
@@ -329,7 +337,8 @@ def resume_from_artifact(spec: ModelSpec, config: dict) -> WorkflowResult:
             batch_size=config["training"]["batch_size"],
             initial_lr=5e-4,
             checkpoint_dir=config["paths"]["checkpoints"],
-            checkpoint_save=str(ctx.checkpoint_path)
+            checkpoint_save=str(ctx.checkpoint_path),
+            device=ctx.device
         )
         result = WorkflowResult(
         artifact_id=ctx.artifact_id,
@@ -358,6 +367,7 @@ def resume_from_artifact(spec: ModelSpec, config: dict) -> WorkflowResult:
             batch_size=config["training"]["batch_size"],
             initial_lr=5e-4,
             checkpoint_dir=config["paths"]["checkpoints"],
+            device=ctx.device
         )
 
         result = WorkflowResult(
@@ -427,7 +437,7 @@ def recovery_from_artifact(spec: ModelSpec, config: dict) -> WorkflowResult:
     if config["mode"] == "visualize":
        plt.show()
     else:   
-      plt.close(f)
+       plt.close(f)
     
 
     # save image in result directory
